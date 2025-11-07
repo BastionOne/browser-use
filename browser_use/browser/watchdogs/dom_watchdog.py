@@ -336,6 +336,7 @@ class DOMWatchdog(BaseWatchdog):
 					)
 
 				return BrowserStateSummary(
+					dom_tree=None,
 					dom_state=content,
 					url=page_url,
 					title='Empty Tab',
@@ -366,7 +367,7 @@ class DOMWatchdog(BaseWatchdog):
 					else None
 				)
 
-				dom_task = asyncio.create_task(self._build_dom_tree_without_highlights(previous_state))
+				dom_task, dom_tree = asyncio.create_task(self._build_dom_tree_without_highlights(previous_state))
 
 			# Start clean screenshot task if requested (without JS highlights)
 			if event.include_screenshot:
@@ -492,6 +493,7 @@ class DOMWatchdog(BaseWatchdog):
 				)
 
 			browser_state = BrowserStateSummary(
+				dom_tree=dom_tree,
 				dom_state=content,
 				url=page_url,
 				title=title,
@@ -519,6 +521,7 @@ class DOMWatchdog(BaseWatchdog):
 
 			# Return minimal recovery state
 			return BrowserStateSummary(
+				dom_tree=None,
 				dom_state=SerializedDOMState(_root=None, selector_map={}),
 				url=page_url if 'page_url' in locals() else '',
 				title='Error',
@@ -550,7 +553,7 @@ class DOMWatchdog(BaseWatchdog):
 
 	@time_execution_async('build_dom_tree_without_highlights')
 	@observe_debug(ignore_input=True, ignore_output=True, name='build_dom_tree_without_highlights')
-	async def _build_dom_tree_without_highlights(self, previous_state: SerializedDOMState | None = None) -> SerializedDOMState:
+	async def _build_dom_tree_without_highlights(self, previous_state: SerializedDOMState | None = None) -> tuple[SerializedDOMState, EnhancedDOMTreeNode]:
 		"""Build DOM tree without injecting JavaScript highlights (for parallel execution)."""
 		try:
 			self.logger.debug('🔍 DOMWatchdog._build_dom_tree_without_highlights: STARTING DOM tree build')
@@ -592,7 +595,7 @@ class DOMWatchdog(BaseWatchdog):
 
 			# Skip JavaScript highlighting injection - Python highlighting will be applied later
 			self.logger.debug('🔍 DOMWatchdog._build_dom_tree_without_highlights: ✅ COMPLETED DOM tree build (no JS highlights)')
-			return self.current_dom_state
+			return self.current_dom_state, self.enhanced_dom_tree
 
 		except Exception as e:
 			self.logger.error(f'Failed to build DOM tree without highlights: {e}')
