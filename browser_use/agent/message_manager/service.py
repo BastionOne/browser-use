@@ -171,6 +171,32 @@ class MessageManager:
 		task_update_item = HistoryItem(system_message=new_task)
 		self.state.agent_history_items.append(task_update_item)
 
+	def replace_task(self, new_task: str) -> None:
+		# Wrap the incoming task as a follow-up request
+		new_task_wrapped = "<follow_up_user_request> " + new_task.strip() + " </follow_up_user_request>"
+
+		start_tag = "<initial_user_request>"
+		end_tag = "</initial_user_request>"
+
+		# Preserve the initial request block if it exists; drop all other tasks
+		base = ""
+		if start_tag in self.task and end_tag in self.task:
+			start = self.task.find(start_tag)
+			end = self.task.find(end_tag, start)
+			if end != -1:
+				end += len(end_tag)
+				base = self.task[start:end]
+
+		# Replace the task string with initial (if any) + new follow-up
+		if base:
+			self.task = base + "\n" + new_task_wrapped
+		else:
+			self.task = new_task_wrapped
+
+		# Record the update in history
+		task_update_item = HistoryItem(system_message=new_task_wrapped)
+		self.state.agent_history_items.append(task_update_item)
+
 	def _update_agent_history_description(
 		self,
 		model_output: AgentOutput | None = None,

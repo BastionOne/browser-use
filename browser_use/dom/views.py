@@ -546,6 +546,17 @@ class EnhancedDOMTreeNode:
 
 		return meaningful_text.strip()
 
+	def to_str(self, options: "SerializeOptions | None" = None) -> str:
+		"""Serialize this DOM subtree to a readable HTML-like string.
+
+		Args:
+			options: Optional serialization options. If None, sensible defaults are used.
+
+		Returns:
+			A string representation of the subtree.
+		"""
+		return serialize_dom(self, options)
+
 	@property
 	def is_actually_scrollable(self) -> bool:
 		"""
@@ -903,3 +914,197 @@ class DOMInteractedElement:
 			x_path=enhanced_dom_tree.xpath,
 			element_hash=hash(enhanced_dom_tree),
 		)
+
+
+# region - Lightweight HTML serializer helpers
+
+from dataclasses import dataclass as _dataclass_serializer
+
+
+@_dataclass_serializer(slots=True)
+class SerializeOptions:
+	include_shadow_dom: bool = True
+	shadow_root_marker: bool = True  # <!--#shadow-root:open-->
+	include_iframe_content: bool = False  # inline iframe content as comments
+	iframe_marker: bool = True
+	pretty: bool = False
+	indent: str = "\t"
+	include_doctype: bool = False
+	doctype: str = "<!doctype html>"
+
+
+_VOID_ELEMENTS = {
+	"area",
+	"base",
+	"br",
+	"col",
+	"embed",
+	"hr",
+	"img",
+	"input",
+	"link",
+	"meta",
+	"param",
+	"source",
+	"track",
+	"wbr",
+}
+
+_BOOLEAN_ATTRS = {
+	"allowfullscreen",
+	"allowpaymentrequest",
+	"async",
+	"autofocus",
+	"autoplay",
+	"checked",
+	"controls",
+	"default",
+	"defer",
+	"disabled",
+	"formnovalidate",
+	"hidden",
+	"inert",
+	"ismap",
+	"itemscope",
+	"loop",
+	"multiple",
+	"muted",
+	"nomodule",
+	"novalidate",
+	"open",
+	"playsinline",
+	"readonly",
+	"required",
+	"reversed",
+	"scoped",
+	"seamless",
+	"selected",
+	"truespeed",
+}
+
+
+def _escape_text(text: str, parent_tag: str | None) -> str:
+	import html as _html
+	if parent_tag in {"script", "style"}:
+		return text
+	return _html.escape(text, quote=False)
+
+
+def _escape_attr_value(value: str) -> str:
+	import html as _html
+	return _html.escape(value, quote=True)
+
+
+def _serialize_attributes(attrs: dict[str, Any]) -> str:
+	if not attrs:
+		return ""
+	parts: list[str] = []
+	for key, value in attrs.items():
+		k = str(key)
+		if value is True or value == "" or str(value).lower() == k.lower() or (k in _BOOLEAN_ATTRS and value):
+			parts.append(k)
+		elif value is False or value is None:
+			continue
+		else:
+			parts.append(f'{k}="{_escape_attr_value(str(value))}"')
+	return (" " + " ".join(parts)) if parts else ""
+
+
+def _indent(depth: int, opts: SerializeOptions) -> str:
+	return opts.indent * depth if opts.pretty else ""
+
+
+def _nl(opts: SerializeOptions) -> str:
+	return "\n" if opts.pretty else ""
+
+
+def serialize_dom(node: "EnhancedDOMTreeNode", opts: SerializeOptions | None = None) -> str:
+	"""Serialize an EnhancedDOMTreeNode subtree to HTML-like text.
+
+	This is a lightweight, dependency-free serializer intended for debugging and
+	LLM-friendly representations. It preserves element/attribute order and supports
+	shadow roots (as comments) and optional iframe inlining.
+	"""
+	opts = opts or SerializeOptions()
+	return _serialize_node(node, opts, depth=0, parent_tag=None)
+
+
+def _serialize_node(node: "EnhancedDOMTreeNode", opts: SerializeOptions, depth: int, parent_tag: str | None) -> str:
+	nt = node.node_type
+	# Document node
+	if nt == NodeType.DOCUMENT_NODE:
+		pieces: list[str] = []
+		if opts.include_doctype:
+			pieces.append(opts.doctype + _nl(opts))
+		for child in node.children:
+			pieces.append(_serialize_node(child, opts, depth, parent_tag=None))
+			if opts.pretty and pieces and not pieces[-1].endswith("\n"):
+				pieces[-1] += "\n"
+		return "".join(pieces)
+
+	# Document fragment (e.g., shadow root)
+	if nt == NodeType.DOCUMENT_FRAGMENT_NODE:
+		return "".join(_serialize_node(child, opts, depth, parent_tag=None) for child in node.children)
+
+	# Text node
+	if nt == NodeType.TEXT_NODE:
+		return _escape_text(node.node_value or "", parent_tag)
+
+	# Comment node
+	if nt == NodeType.COMMENT_NODE:
+		val = node.node_value or ""
+		return f"<!--{val}-->"
+
+	# Element node
+	if nt == NodeType.ELEMENT_NODE:
+		tag = node.tag_name
+		attrs = _serialize_attributes(node.attributes or {})
+		pad = _indent(depth, opts)
+		open_tag = f"{pad}<{tag}{attrs}>"
+		close_tag = f"</{tag}>"
+
+		# Void elements
+		if tag in _VOID_ELEMENTS:
+			return f"{pad}<{tag}{attrs}>{_nl(opts)}" if opts.pretty else f"<{tag}{attrs}>"
+
+		child_chunks: list[str] = []
+
+		# Inline shadow roots
+		if opts.include_shadow_dom and node.shadow_roots:
+			for sr in node.shadow_roots:
+				if opts.shadow_root_marker:
+					typ = getattr(sr, "shadow_root_type", None)
+					typ_str = str(getattr(typ, "name", typ) or "unknown")
+					child_chunks.append(f"{_indent(depth + 1, opts)}<!--#shadow-root:{typ_str}-->{_nl(opts)}")
+				child_chunks.append(_serialize_node(sr, opts, depth + 1, parent_tag=None))
+				if opts.pretty and child_chunks and not child_chunks[-1].endswith("\n"):
+					child_chunks[-1] += "\n"
+
+		# Regular children
+		for ch in node.children:
+			child_chunks.append(_serialize_node(ch, opts, depth + 1, parent_tag=tag))
+			if opts.pretty and child_chunks and not child_chunks[-1].endswith("\n"):
+				child_chunks[-1] += "\n"
+
+		# Optional iframe content inlining
+		if tag == "iframe" and opts.include_iframe_content and node.content_document:
+			if opts.iframe_marker:
+				child_chunks.append(f"{_indent(depth + 1, opts)}<!--#document:iframe content start-->{_nl(opts)}")
+			child_chunks.append(_serialize_node(node.content_document, opts, depth + 1, parent_tag=None))
+			if opts.iframe_marker:
+				if opts.pretty and child_chunks and not child_chunks[-1].endswith("\n"):
+					child_chunks[-1] += "\n"
+				child_chunks.append(f"{_indent(depth + 1, opts)}<!--#document:iframe content end-->{_nl(opts)}")
+
+		if child_chunks:
+			inner = "".join(child_chunks)
+			if opts.pretty:
+				return f"{open_tag}{_nl(opts)}{inner}{_indent(depth, opts)}{close_tag}{_nl(opts)}"
+			return f"{open_tag}{inner}{close_tag}"
+		else:
+			return f"{open_tag}{close_tag}{_nl(opts)}" if opts.pretty else f"{open_tag}{close_tag}"
+
+	# Fallback: treat as text
+	return _escape_text(node.node_value or "", parent_tag)
+
+# endregion - Lightweight HTML serializer helpers

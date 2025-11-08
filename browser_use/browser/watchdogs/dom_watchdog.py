@@ -367,7 +367,7 @@ class DOMWatchdog(BaseWatchdog):
 					else None
 				)
 
-				dom_task, dom_tree = asyncio.create_task(self._build_dom_tree_without_highlights(previous_state))
+				dom_task = asyncio.create_task(self._build_dom_tree_without_highlights(previous_state))
 
 			# Start clean screenshot task if requested (without JS highlights)
 			if event.include_screenshot:
@@ -380,7 +380,7 @@ class DOMWatchdog(BaseWatchdog):
 
 			if dom_task:
 				try:
-					content = await dom_task
+					content, dom_tree = await dom_task
 					self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: ✅ DOM tree build completed')
 				except Exception as e:
 					self.logger.warning(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: DOM build failed: {e}, using minimal state')
@@ -517,7 +517,7 @@ class DOMWatchdog(BaseWatchdog):
 			return browser_state
 
 		except Exception as e:
-			self.logger.error(f'Failed to get browser state: {e}')
+			self.logger.error(f'Failed to get browser state: {e}', exc_info=True)
 
 			# Return minimal recovery state
 			return BrowserStateSummary(

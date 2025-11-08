@@ -641,6 +641,23 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			agent_id_suffix = 'a' + agent_id_suffix
 		self.eventbus = EventBus(name=f'Agent_{agent_id_suffix}')
 
+	def replace_task(self, new_task: str) -> None:
+		"""Replace existing follow-up tasks with a new one, keeping initial request intact if present"""
+		# Keep Agent.task as the latest raw user instruction
+		self.task = new_task
+		# Delegate to MessageManager to rewrite its internal task string with proper tags
+		self._message_manager.replace_task(new_task)
+		# Mark as follow-up task and reset control flags so agent can continue
+		self.state.follow_up_task = True
+		self.state.stopped = False
+		self.state.paused = False
+
+		# do we need this???
+		# agent_id_suffix = str(self.id)[-4:].replace('-', '_')
+		# if agent_id_suffix and agent_id_suffix[0].isdigit():
+		# 	agent_id_suffix = 'a' + agent_id_suffix
+		# self.eventbus = EventBus(name=f'Agent_{agent_id_suffix}')
+
 	async def _check_stop_or_pause(self) -> None:
 		"""Check if the agent should stop or pause, and handle accordingly."""
 
@@ -823,7 +840,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			return
 
 		# Handle all other exceptions
-		include_trace = self.logger.isEnabledFor(logging.DEBUG)
+		# Always log full stack trace for easier debugging
+		include_trace = False
 		error_msg = AgentError.format_error(error, include_trace=include_trace)
 		prefix = f'❌ Result failed {self.state.consecutive_failures + 1}/{self.settings.max_failures + int(self.settings.final_response_after_failure)} times:\n '
 		self.state.consecutive_failures += 1
@@ -831,9 +849,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if 'Could not parse response' in error_msg or 'tool_use_failed' in error_msg:
 			# give model a hint how output should look like
 			logger.error(f'Model: {self.llm.model} failed')
-			logger.error(f'{prefix}{error_msg}')
+			logger.exception(f'{prefix}{error_msg}')
 		else:
-			self.logger.error(f'{prefix}{error_msg}')
+			self.logger.exception(f'{prefix}{error_msg}')
 
 		self.state.last_result = [ActionResult(error=error_msg)]
 		return None
