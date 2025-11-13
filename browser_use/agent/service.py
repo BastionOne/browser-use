@@ -2081,17 +2081,33 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# selector_hash_map = {hash(e): e for e in browser_state_summary.dom_state.selector_map.values()}
 
-		highlight_index, current_element = next(
-			(
-				(highlight_index, element)
-				for highlight_index, element in browser_state_summary.dom_state.selector_map.items()
-				if element.element_hash == historical_element.element_hash
-			),
-			(None, None),
-		)
+		# Find all elements that match the historical element hash
+		matched_elements = [
+			(highlight_index, element)
+			for highlight_index, element in browser_state_summary.dom_state.selector_map.items()
+			if element.element_hash == historical_element.element_hash
+		]
 
-		if not current_element or highlight_index is None:
+		if not matched_elements:
 			return None
+
+		# Log all matched element IDs
+		if matched_elements == 1:
+			highlight_index, current_element = matched_elements[0]
+		else:
+			# fallback method more expensive since we need to recursively grab all child text so limiting it to the elements
+			# that we alrdy match on
+			self.logger.info(f"{len(matched_elements)} elements found, falling back to matching on children text")
+			matched_elements = [
+				(highlight_index, element)
+				for highlight_index, element in matched_elements
+				if element.get_all_children_text() == historical_element.children_text
+			]
+			if len(matched_elements) == 1:
+				highlight_index, current_element = matched_elements[0]
+			else:
+				self.logger.error(f"Fallback still yielded {len(matched_elements)} elements, giving up")
+				highlight_index, current_element = matched_elements[0]
 
 		old_index = action.get_index()
 		if old_index != highlight_index:

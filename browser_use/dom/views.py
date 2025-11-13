@@ -885,6 +885,8 @@ class DOMInteractedElement:
 	x_path: str
 
 	element_hash: int
+ 
+	children_text: str
 
 	def to_dict(self) -> dict[str, Any]:
 		return {
@@ -898,6 +900,7 @@ class DOMInteractedElement:
 			'x_path': self.x_path,
 			'element_hash': self.element_hash,
 			'bounds': self.bounds.to_dict() if self.bounds else None,
+			'children_text': self.children_text,
 		}
 
 	@classmethod
@@ -913,6 +916,7 @@ class DOMInteractedElement:
 			bounds=enhanced_dom_tree.snapshot_node.bounds if enhanced_dom_tree.snapshot_node else None,
 			x_path=enhanced_dom_tree.xpath,
 			element_hash=hash(enhanced_dom_tree),
+			children_text=enhanced_dom_tree.get_all_children_text(),
 		)
 
 
