@@ -337,7 +337,6 @@ class AgentHistory(BaseModel):
 
 	def model_dump(self, sensitive_data: dict[str, str | dict[str, str]] | None = None, **kwargs) -> dict[str, Any]:
 		"""Custom serialization handling circular references and filtering sensitive data"""
-
 		# Handle action serialization
 		model_output_dump = None
 		if self.model_output:

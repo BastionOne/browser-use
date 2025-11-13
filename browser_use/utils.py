@@ -103,15 +103,16 @@ class SignalHandler:
 		"""Register signal handlers for SIGINT and SIGTERM."""
 		try:
 			if self.is_windows:
+				pass
 				# On Windows, use simple signal handling with immediate exit on Ctrl+C
-				def windows_handler(sig, frame):
-					print('\n\n🛑 Got Ctrl+C. Exiting immediately on Windows...\n', file=stderr)
-					# Run the custom exit callback if provided
-					if self.custom_exit_callback:
-						self.custom_exit_callback()
-					os._exit(0)
+				# def windows_handler(sig, frame):
+				# 	print('\n\n🛑 Got Ctrl+C. Exiting immediately on Windows...\n', file=stderr)
+				# 	# Run the custom exit callback if provided
+				# 	if self.custom_exit_callback:
+				# 		self.custom_exit_callback()
+				# 	os._exit(0)
 
-				self.original_sigint_handler = signal.signal(signal.SIGINT, windows_handler)
+				# self.original_sigint_handler = signal.signal(signal.SIGINT, windows_handler)
 			else:
 				# On Unix-like systems, use asyncio's signal handling for smoother experience
 				self.original_sigint_handler = self.loop.add_signal_handler(signal.SIGINT, lambda: self.sigint_handler())
