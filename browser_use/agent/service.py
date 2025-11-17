@@ -1045,11 +1045,19 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Store screenshot and get path
 		screenshot_path = None
-		if browser_state_summary.screenshot:
+
+		# get a fresh screenshot after actions have been executed
+		asyncio.sleep(1.5) # -> need to wait a bit for screenshot to resettle
+		new_browser_state_summary = await self.browser_session.get_browser_state_summary(
+			include_screenshot=True,
+			include_recent_events=False,
+		)
+		if new_browser_state_summary.screenshot:
+			# get the screenshot after the actions has been taken
 			self.logger.debug(
-				f'📸 Storing screenshot for step {self.state.n_steps}, screenshot length: {len(browser_state_summary.screenshot)}'
+				f'📸 Storing screenshot for step {self.state.n_steps}, screenshot length: {len(new_browser_state_summary.screenshot)}'
 			)
-			screenshot_path = await self.screenshot_service.store_screenshot(browser_state_summary.screenshot, self.state.n_steps)
+			screenshot_path = await self.screenshot_service.store_screenshot(new_browser_state_summary.screenshot, self.state.n_steps)
 			self.logger.debug(f'📸 Screenshot stored at: {screenshot_path}')
 		else:
 			self.logger.debug(f'📸 No screenshot in browser_state_summary for step {self.state.n_steps}')
@@ -2091,8 +2099,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if not matched_elements:
 			return None
 
+		self.logger.info(f"Matched elements: {matched_elements}")
 		# Log all matched element IDs
-		if matched_elements == 1:
+		if len(matched_elements) == 1:
 			highlight_index, current_element = matched_elements[0]
 		else:
 			# fallback method more expensive since we need to recursively grab all child text so limiting it to the elements
