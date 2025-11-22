@@ -139,7 +139,8 @@ class MessageManager:
 		"""Build agent history description from list of items, respecting max_history_items limit"""
 		if self.max_history_items is None:
 			# Include all items
-			return '\n'.join(item.to_string() for item in self.state.agent_history_items)
+			# return '\n'.join(item.to_string() for item in self.state.agent_history_items)
+			return '\n'.join(f"{i}.\n" + item.to_string() for i, item in enumerate(self.state.agent_history_items))
 
 		total_items = len(self.state.agent_history_items)
 

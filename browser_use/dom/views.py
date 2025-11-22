@@ -2,6 +2,7 @@ import hashlib
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
+import re
 
 from cdp_use.cdp.accessibility.commands import GetFullAXTreeReturns
 from cdp_use.cdp.accessibility.types import AXPropertyName
@@ -836,7 +837,12 @@ class SerializedDOMState:
 
 		include_attributes = include_attributes or DEFAULT_INCLUDE_ATTRIBUTES
 
-		return DOMTreeSerializer.serialize_tree(self._root, include_attributes)
+		serialized = DOMTreeSerializer.serialize_tree(self._root, include_attributes)
+		
+		# Remove the entire nested structure: [ID]<div /> > [ID]<p /> > [ID]<a /> > "Settings"
+		# This eliminates the Settings menu DOM structure including node IDs, tags, and text
+		pattern = r'\[\d+\]<div />\s+\[\d+\]<p />\s+\[\d+\]<a />\s+Settings'
+		return re.sub(pattern, '', serialized)
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='eval_representation')
 	def eval_representation(
