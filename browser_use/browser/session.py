@@ -1324,6 +1324,14 @@ class BrowserSession(BaseModel):
 		if self.browser_profile.auto_download_pdfs:
 			self.logger.debug('📄 PDF auto-download enabled for this session')
 
+		# Initialize NetworkInterceptionWatchdog (for HTTP traffic capture via CDP)
+		from browser_use.browser.watchdogs.network_interception_watchdog import NetworkInterceptionWatchdog
+
+		NetworkInterceptionWatchdog.model_rebuild()
+		self._network_interception_watchdog = NetworkInterceptionWatchdog(event_bus=self.event_bus, browser_session=self)
+		self._network_interception_watchdog.attach_to_session()
+		self.logger.debug('🌐 NetworkInterceptionWatchdog initialized (inactive until HTTPHandler is set)')
+
 		# Initialize StorageStateWatchdog conditionally
 		# Enable when user provides either storage_state or user_data_dir (indicating they want persistence)
 		should_enable_storage_state = (
