@@ -172,7 +172,10 @@ class SessionManager:
 			if target_id not in self.browser_session._cdp_session_pool:
 				from browser_use.browser.session import CDPSession
 
-				assert self.browser_session._cdp_client_root is not None, 'Root CDP client required'
+				if self.browser_session._cdp_client_root is None:
+					# Root CDP client can disappear after disconnects; fail gracefully instead of crashing
+					self.logger.error('[SessionManager] Target attached but root CDP client missing; skipping session creation')
+					return
 
 				cdp_session = CDPSession(
 					cdp_client=self.browser_session._cdp_client_root,
@@ -198,9 +201,11 @@ class SessionManager:
 		# Resume execution if waiting for debugger
 		if waiting_for_debugger:
 			try:
-				assert self.browser_session._cdp_client_root is not None
-				await self.browser_session._cdp_client_root.send.Runtime.runIfWaitingForDebugger(session_id=session_id)
-				self.logger.debug(f'[SessionManager] Resumed execution for session {session_id[:8]}...')
+				if self.browser_session._cdp_client_root is None:
+					self.logger.error('[SessionManager] Missing root CDP client; cannot resume debugger for session %s', session_id[:8])
+				else:
+					await self.browser_session._cdp_client_root.send.Runtime.runIfWaitingForDebugger(session_id=session_id)
+					self.logger.debug(f'[SessionManager] Resumed execution for session {session_id[:8]}...')
 			except Exception as e:
 				self.logger.warning(f'[SessionManager] Failed to resume execution: {e}')
 
