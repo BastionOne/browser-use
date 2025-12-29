@@ -228,21 +228,35 @@ class StorageStateWatchdog(BaseWatchdog):
 				self.logger.error(f'[StorageStateWatchdog] Failed to save storage state: {e}')
 
 	async def _load_storage_state(self, path: str | None = None) -> None:
-		"""Load browser storage state from file."""
+		"""Load browser storage state from file or dict."""
 		if not self.browser_session.cdp_client:
 			self.logger.warning('[StorageStateWatchdog] No CDP client available for loading')
 			return
 
-		load_path = path or self.browser_session.browser_profile.storage_state
-		if not load_path or not os.path.exists(str(load_path)):
+		load_source = path or self.browser_session.browser_profile.storage_state
+		if not load_source:
 			return
 
 		try:
-			# Read the storage state file asynchronously
-			import anyio
+			import ast
 
-			content = await anyio.Path(str(load_path)).read_text()
-			storage = json.loads(content)
+			# Handle dict passed directly (including subclasses)
+			if isinstance(load_source, dict):
+				storage = load_source
+			# Handle string that might be a dict repr (Python uses single quotes, JSON uses double)
+			elif isinstance(load_source, str) and load_source.strip().startswith('{'):
+				# Try JSON first, then fall back to ast.literal_eval for Python dict repr
+				try:
+					storage = json.loads(load_source)
+				except json.JSONDecodeError:
+					storage = ast.literal_eval(load_source)
+			# Handle file path
+			elif isinstance(load_source, (str, Path)) and os.path.exists(str(load_source)):
+				import anyio
+				content = await anyio.Path(str(load_source)).read_text()
+				storage = json.loads(content)
+			else:
+				return
 
 			# Apply cookies if present
 			if 'cookies' in storage and storage['cookies']:
