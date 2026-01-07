@@ -23,7 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from browser_use.agent.views import AgentState, AgentHistoryList
 from browser_use.agent.views import AgentOutput
-from common.agent import BrowserUseAgent
+
+if TYPE_CHECKING:
+    from browser_use.agent.service import Agent as BrowserUseAgent
 
 class BrowserAgentState(BaseModel):
     """Serializable snapshot of an Agent for persistence and restart.
