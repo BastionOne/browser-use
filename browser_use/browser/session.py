@@ -156,6 +156,213 @@ class CDPSession(BaseModel):
 		return result['targetInfo']
 
 
+class CDPCookiesShim:
+	"""Shim for proper CDP cookie operations.
+
+	Provides reliable cookie get/set/clear using the Network domain,
+	which is more consistent than Storage domain for cookie operations.
+
+	CDP Cookie operations:
+	- Network.getCookies(urls?) - Get cookies, optionally filtered by URLs
+	- Network.setCookies(cookies) - Set cookies (requires url OR domain for each cookie)
+	- Network.deleteCookies(name, url?, domain?, path?) - Delete specific cookies
+	- Network.clearBrowserCookies() - Clear all browser cookies
+
+	The Storage domain (Storage.getCookies/setCookies/clearCookies) is also available
+	but requires browserContextId for proper scoping and has different semantics.
+	"""
+
+	def __init__(self, cdp_client: CDPClient, get_session_func, logger=None):
+		"""Initialize the cookies shim.
+
+		Args:
+			cdp_client: The root CDP client for browser-level operations
+			get_session_func: Async function to get a CDPSession for page-level operations
+			logger: Optional logger instance
+		"""
+		self.cdp_client = cdp_client
+		self._get_session = get_session_func
+		self.logger = logger or logging.getLogger(__name__)
+
+	async def get_cookies(self, urls: list[str] | None = None) -> list[Cookie]:
+		"""Get cookies, optionally filtered by URLs.
+
+		Uses Network.getCookies which returns cookies for the current page
+		or filtered by the provided URLs.
+
+		Args:
+			urls: Optional list of URLs to filter cookies by
+
+		Returns:
+			List of Cookie objects
+		"""
+		from cdp_use.cdp.network import GetCookiesParameters
+
+		params: GetCookiesParameters = {}
+		if urls:
+			params['urls'] = urls
+
+		# Network.getCookies requires a CDP session for a specific target
+		cdp_session = await self._get_session(target_id=None)
+		result = await cdp_session.cdp_client.send.Network.getCookies(
+			params=params,
+			session_id=cdp_session.session_id
+		)
+		return result.get('cookies', [])
+
+	async def get_all_cookies(self) -> list[Cookie]:
+		"""Get all cookies from the browser using Storage domain.
+
+		Uses Storage.getCookies which returns decrypted cookies from all domains.
+		This is useful for exporting all cookies regardless of current page.
+
+		Returns:
+			List of Cookie objects
+		"""
+		cdp_session = await self._get_session(target_id=None)
+		result = await asyncio.wait_for(
+			cdp_session.cdp_client.send.Storage.getCookies(session_id=cdp_session.session_id),
+			timeout=8.0
+		)
+		return result.get('cookies', [])
+
+	async def set_cookies(self, cookies: list[Cookie | dict[str, Any]]) -> None:
+		"""Set cookies using Network.setCookies.
+
+		Each cookie must have:
+		- name: Cookie name
+		- value: Cookie value
+		- url OR domain: Target URL or domain
+
+		Optional fields: path, secure, httpOnly, sameSite, expires, priority, etc.
+
+		Args:
+			cookies: List of cookies to set. Each cookie must have name, value,
+			         and either url or domain.
+		"""
+		if not cookies:
+			return
+
+		# Normalize cookies - ensure each has either url or domain
+		normalized_cookies = []
+		for cookie in cookies:
+			# Convert Cookie TypedDict to regular dict if needed
+			c = dict(cookie) if hasattr(cookie, 'keys') else cookie
+
+			# If cookie has domain but no url, construct url from domain
+			if 'domain' in c and 'url' not in c:
+				domain = c['domain']
+				# Remove leading dot from domain if present
+				clean_domain = domain.lstrip('.')
+				# Construct URL based on secure flag
+				scheme = 'https' if c.get('secure', True) else 'http'
+				c['url'] = f'{scheme}://{clean_domain}{c.get("path", "/")}'
+
+			# Ensure required fields exist
+			if 'name' not in c or 'value' not in c:
+				self.logger.warning(f'Skipping cookie without name or value: {c}')
+				continue
+
+			if 'url' not in c and 'domain' not in c:
+				self.logger.warning(f'Skipping cookie without url or domain: {c}')
+				continue
+
+			normalized_cookies.append(c)
+
+		if not normalized_cookies:
+			return
+
+		try:
+			# Network.setCookies requires a CDP session for a specific target
+			cdp_session = await self._get_session(target_id=None)
+			await cdp_session.cdp_client.send.Network.setCookies(
+				params={'cookies': normalized_cookies},
+				session_id=cdp_session.session_id
+			)
+			self.logger.debug(f'Set {len(normalized_cookies)} cookies via Network.setCookies')
+		except Exception as e:
+			self.logger.error(f'Failed to set cookies via Network.setCookies: {e}')
+			# Fallback to Storage.setCookies
+			await self._set_cookies_via_storage(normalized_cookies)
+
+	async def _set_cookies_via_storage(self, cookies: list[dict[str, Any]]) -> None:
+		"""Fallback: Set cookies using Storage.setCookies.
+
+		Args:
+			cookies: List of cookie dicts to set
+		"""
+		try:
+			cdp_session = await self._get_session(target_id=None)
+			await cdp_session.cdp_client.send.Storage.setCookies(
+				params={'cookies': cookies},
+				session_id=cdp_session.session_id,
+			)
+			self.logger.debug(f'Set {len(cookies)} cookies via Storage.setCookies (fallback)')
+		except Exception as e:
+			self.logger.error(f'Failed to set cookies via Storage.setCookies: {e}')
+
+	async def delete_cookies(
+		self,
+		name: str,
+		url: str | None = None,
+		domain: str | None = None,
+		path: str | None = None
+	) -> None:
+		"""Delete specific cookies matching the criteria.
+
+		Args:
+			name: Cookie name (required)
+			url: URL to match (optional)
+			domain: Domain to match (optional)
+			path: Path to match (optional)
+		"""
+		params: dict[str, Any] = {'name': name}
+		if url:
+			params['url'] = url
+		if domain:
+			params['domain'] = domain
+		if path:
+			params['path'] = path
+
+		# Network.deleteCookies requires a CDP session
+		cdp_session = await self._get_session(target_id=None)
+		await cdp_session.cdp_client.send.Network.deleteCookies(
+			params=params,
+			session_id=cdp_session.session_id
+		)
+
+	async def clear_all_cookies(self) -> None:
+		"""Clear all browser cookies using Network.clearBrowserCookies."""
+		# Network.clearBrowserCookies requires a CDP session
+		cdp_session = await self._get_session(target_id=None)
+		await cdp_session.cdp_client.send.Network.clearBrowserCookies(
+			session_id=cdp_session.session_id
+		)
+		self.logger.debug('Cleared all browser cookies via Network.clearBrowserCookies')
+
+	async def clear_cookies_for_domain(self, domain: str) -> None:
+		"""Clear all cookies for a specific domain.
+
+		Args:
+			domain: Domain to clear cookies for (e.g., 'example.com')
+		"""
+		# Get all cookies first
+		all_cookies = await self.get_all_cookies()
+
+		# Filter cookies for the specified domain
+		clean_domain = domain.lstrip('.')
+		for cookie in all_cookies:
+			cookie_domain = cookie.get('domain', '').lstrip('.')
+			if cookie_domain == clean_domain or cookie_domain.endswith('.' + clean_domain):
+				await self.delete_cookies(
+					name=cookie['name'],
+					domain=cookie.get('domain'),
+					path=cookie.get('path')
+				)
+
+		self.logger.debug(f'Cleared cookies for domain: {domain}')
+
+
 class BrowserSession(BaseModel):
 	"""Event-driven browser session with backwards compatibility.
 
@@ -477,6 +684,7 @@ class BrowserSession(BaseModel):
 	_recording_watchdog: Any | None = PrivateAttr(default=None)
 
 	_cloud_browser_client: CloudBrowserClient = PrivateAttr(default_factory=lambda: CloudBrowserClient())
+	_cookies_shim: CDPCookiesShim | None = PrivateAttr(default=None)
 
 	_logger: Any = PrivateAttr(default=None)
 
@@ -527,6 +735,7 @@ class BrowserSession(BaseModel):
 		self._cdp_session_pool.clear()
 
 		self._cdp_client_root = None  # type: ignore
+		self._cookies_shim = None
 		self._cached_browser_state_summary = None
 		self._cached_selector_map.clear()
 		self._downloaded_files.clear()
@@ -1091,20 +1300,32 @@ class BrowserSession(BaseModel):
 		params: CloseTargetParameters = {'targetId': target_id}
 		await self.cdp_client.send.Target.closeTarget(params)
 
+	@property
+	def cookies_shim(self) -> CDPCookiesShim | None:
+		"""Get the CDP cookies shim for direct cookie operations."""
+		return self._cookies_shim
+
 	async def cookies(self, urls: list[str] | None = None) -> list['Cookie']:
 		"""Get cookies, optionally filtered by URLs."""
-		from cdp_use.cdp.network.library import GetCookiesParameters
+		if self._cookies_shim:
+			return await self._cookies_shim.get_cookies(urls)
+
+		# Fallback to direct CDP call if shim not initialized
+		from cdp_use.cdp.network import GetCookiesParameters
 
 		params: GetCookiesParameters = {}
 		if urls:
 			params['urls'] = urls
 
 		result = await self.cdp_client.send.Network.getCookies(params)
-		return result['cookies']
+		return result.get('cookies', [])
 
 	async def clear_cookies(self) -> None:
 		"""Clear all cookies."""
-		await self.cdp_client.send.Network.clearBrowserCookies()
+		if self._cookies_shim:
+			await self._cookies_shim.clear_all_cookies()
+		else:
+			await self.cdp_client.send.Network.clearBrowserCookies()
 
 	async def export_storage_state(self, output_path: str | Path | None = None) -> dict[str, Any]:
 		"""Export all browser cookies and storage to storage_state format.
@@ -1462,6 +1683,13 @@ class BrowserSession(BaseModel):
 			assert self._cdp_client_root is not None
 			await self._cdp_client_root.start()
 
+			# Initialize the cookies shim for proper CDP cookie operations
+			self._cookies_shim = CDPCookiesShim(
+				cdp_client=self._cdp_client_root,
+				get_session_func=self.get_or_create_cdp_session,
+				logger=self.logger,
+			)
+
 			# Initialize event-driven session manager FIRST (before enabling autoAttach)
 			from browser_use.browser.session_manager import SessionManager
 
@@ -1580,6 +1808,7 @@ class BrowserSession(BaseModel):
 			self.logger.error('❌ Browser cannot continue without CDP connection')
 			# Clean up any partial state
 			self._cdp_client_root = None
+			self._cookies_shim = None
 			self.agent_focus = None
 			# Re-raise as a fatal error
 			raise RuntimeError(f'Failed to establish CDP connection to browser: {e}') from e
@@ -2559,7 +2788,15 @@ class BrowserSession(BaseModel):
 		await self.cdp_client.send.Target.closeTarget(params={'targetId': target_id})
 
 	async def _cdp_get_cookies(self) -> list[Cookie]:
-		"""Get cookies using CDP Network.getCookies."""
+		"""Get all cookies using CDP.
+
+		Uses the CDPCookiesShim for proper cookie retrieval via Storage.getCookies.
+		This returns decrypted cookies from all domains.
+		"""
+		if self._cookies_shim:
+			return await self._cookies_shim.get_all_cookies()
+
+		# Fallback to direct Storage.getCookies if shim not initialized
 		cdp_session = await self.get_or_create_cdp_session(target_id=None)
 		result = await asyncio.wait_for(
 			cdp_session.cdp_client.send.Storage.getCookies(session_id=cdp_session.session_id), timeout=8.0
@@ -2567,8 +2804,20 @@ class BrowserSession(BaseModel):
 		return result.get('cookies', [])
 
 	async def _cdp_set_cookies(self, cookies: list[Cookie]) -> None:
-		"""Set cookies using CDP Storage.setCookies."""
-		if not self.agent_focus or not cookies:
+		"""Set cookies using CDP.
+
+		Uses the CDPCookiesShim for proper cookie setting via Network.setCookies.
+		The shim handles URL construction and falls back to Storage.setCookies if needed.
+		"""
+		if not cookies:
+			return
+
+		if self._cookies_shim:
+			await self._cookies_shim.set_cookies(cookies)
+			return
+
+		# Fallback: require agent_focus for Storage.setCookies
+		if not self.agent_focus:
 			return
 
 		cdp_session = await self.get_or_create_cdp_session(target_id=None)
@@ -2579,7 +2828,15 @@ class BrowserSession(BaseModel):
 		)
 
 	async def _cdp_clear_cookies(self) -> None:
-		"""Clear all cookies using CDP Network.clearBrowserCookies."""
+		"""Clear all cookies using CDP.
+
+		Uses the CDPCookiesShim for proper cookie clearing via Network.clearBrowserCookies.
+		"""
+		if self._cookies_shim:
+			await self._cookies_shim.clear_all_cookies()
+			return
+
+		# Fallback to Storage.clearCookies
 		cdp_session = await self.get_or_create_cdp_session()
 		await cdp_session.cdp_client.send.Storage.clearCookies(session_id=cdp_session.session_id)
 

@@ -712,21 +712,6 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 		return self
 
 	@model_validator(mode='after')
-	def warn_storage_state_user_data_dir_conflict(self) -> Self:
-		"""Warn when both storage_state and user_data_dir are set, as this can cause conflicts."""
-		has_storage_state = self.storage_state is not None
-		has_user_data_dir = (self.user_data_dir is not None) and ('tmp' not in str(self.user_data_dir).lower())
-
-		if has_storage_state and has_user_data_dir:
-			logger.warning(
-				f'⚠️ BrowserSession(...) was passed both storage_state AND user_data_dir. storage_state={self.storage_state} will forcibly overwrite '
-				f'cookies/localStorage/sessionStorage in user_data_dir={self.user_data_dir}. '
-				f'For multiple browsers in parallel, use only storage_state with user_data_dir=None, '
-				f'or use a separate user_data_dir for each browser and set storage_state=None.'
-			)
-		return self
-
-	@model_validator(mode='after')
 	def warn_user_data_dir_non_default_version(self) -> Self:
 		"""
 		If user is using default profile dir with a non-default channel, force-change it
